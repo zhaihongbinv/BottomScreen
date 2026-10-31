@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net8.0-windows10.0.26100": {
+      "Microsoft.NET.ILLink.Tasks": {
+        "type": "Direct",
+        "requested": "[8.0.33, )",
+        "resolved": "8.0.33",
+        "contentHash": "dG9SM/0/zOTIE1UvSrveD1iDyEJjThqPqSnreExgqQWSoGWvze0esDi0faRk3C44IO1kqCeEX6AeCxWmBOppfw=="
+      },
+      "System.IO.Pipelines": {
+        "type": "Direct",
+        "requested": "[10.0.14, )",
+        "resolved": "10.0.14",
+        "contentHash": "pLVClkIC4XfXhcOQXNtNDJl5LYJOS4XAQAdzbqF8rj6sk2zdXO/5uikBsZqgqnAAb07z9Fmtu0sMj3TwEiBtIw=="
+      },
+      "System.Text.Encodings.Web": {
+        "type": "Direct",
+        "requested": "[10.0.14, )",
+        "resolved": "10.0.14",
+        "contentHash": "+aDpFLtsHyft9ZVx9pZQ9MILqwrr8LK1te1L39VMKQYhoYDbs+RUqBhCT3Zydb5ymi2Buo4Cn+3Wi208IxD6rw=="
+      },
+      "System.Text.Json": {
+        "type": "Direct",
+        "requested": "[10.0.14, )",
+        "resolved": "10.0.14",
+        "contentHash": "JSSLGJTJJDvS76VnLdY1X289rFcHuYApk7QGw0hCoP5wVR1mk7BvJbOYxQLXq4x1qK/Ml9OHa/AKaAbBVCfSSQ==",
+        "dependencies": {
+          "System.IO.Pipelines": "10.0.14",
+          "System.Text.Encodings.Web": "10.0.14"
+        }
+      },
+      "Vortice.D3DCompiler": {
+        "type": "Direct",
+        "requested": "[3.8.3, )",
+        "resolved": "3.8.3",
+        "contentHash": "OmGPMhf/xnD8/HZ0ms1x7xSFyz+6e6mveCqhu0EioMFQYKJM35/ZVLLo+FIB5KpsrlqhM/jvYHYPAxu45YONGg==",
+        "dependencies": {
+          "SharpGen.Runtime": "2.4.2-beta",
+          "Vortice.DirectX": "3.8.3"
+        }
+      },
+      "Vortice.Direct3D11": {
+        "type": "Direct",
+        "requested": "[3.8.3, )",
+        "resolved": "3.8.3",
+        "contentHash": "JgFUswu2mgrSwcd0KRF2AnfeE5VbMEgcicmxPD1g2yXyomPIHbnX3wldBNHPOzzD0URC1WJ/pO1ymfi3imZwvg==",
+        "dependencies": {
+          "SharpGen.Runtime": "2.4.2-beta",
+          "Vortice.DXGI": "3.8.3"
+        }
+      },
+      "Vortice.DirectComposition": {
+        "type": "Direct",
+        "requested": "[3.8.3, )",
+        "resolved": "3.8.3",
+        "contentHash": "2/QD9K9UC7z/2FgK8/gVyySfMppwOz006+9eMtrcEbsTwYNxBxJGCeY09oM8Mr7CLOVY581sg89lIES+2URd6A==",
+        "dependencies": {
+          "SharpGen.Runtime": "2.4.2-beta",
+          "Vortice.DXGI": "3.8.3",
+          "Vortice.Direct2D1": "3.8.3",
+          "Vortice.DirectX": "3.8.3"
+        }
+      },
+      "SharpGen.Runtime": {
+        "type": "Transitive",
+        "resolved": "2.4.2-beta",
+        "contentHash": "niTtWAUov1F7wZGAlVeEvW+Tnqvg5yTmhI7rxmYu2Utoyu2TbC9tWWpUpMs0PQg5lu5svoYpCAztNjxCqMFP/w==",
+        "dependencies": {
+          "System.Text.Json": "9.0.1"
+        }
+      },
+      "SharpGen.Runtime.COM": {
+        "type": "Transitive",
+        "resolved": "2.4.2-beta",
+        "contentHash": "9lxDFMiepqo3lJQzMSjECCIONeCc2f3Drokgj6HtrTLZcJSftNgcLbD6/iXYj2iphkwgrZb1oLsDOZxoFZkawQ==",
+        "dependencies": {
+          "SharpGen.Runtime": "2.4.2-beta",
+          "System.Text.Json": "9.0.1"
+        }
+      },
+      "Vortice.Direct2D1": {
+        "type": "Transitive",
+        "resolved": "3.8.3",
+        "contentHash": "SDHEmNUT3A4P8yj+g7q3AnRZ9fvqOOe/EoWjsgkHlQ3C9Tkc51rTeZXC9bQPySli+/lFTui8vMs9tpWZqf+AwQ==",
+        "dependencies": {
+          "SharpGen.Runtime": "2.4.2-beta",
+          "Vortice.DXGI": "3.8.3"
+        }
+      },
+      "Vortice.DirectX": {
+        "type": "Transitive",
+        "resolved": "3.8.3",
+        "contentHash": "nKwSavv0w5rDF7prSefqAVPDcTyqrfZxKFMVfttiXPfm62VdA/1d+b3PhCZpW4xO7jXczXDwjQdWgD1zGsvM8w==",
+        "dependencies": {
+          "SharpGen.Runtime": "2.4.2-beta",
+          "SharpGen.Runtime.COM": "2.4.2-beta",
+          "Vortice.Mathematics": "2.1.0"
+        }
+      },
+      "Vortice.DXGI": {
+        "type": "Transitive",
+        "resolved": "3.8.3",
+        "contentHash": "MbAUnTeQ6WD99ctAdrj5CQO2I7oaax0Kt2eVdWSUj0bYP9Ed0726+s7dIHe4+tqhpmINW/dcPt0mNtc72o+E0w==",
+        "dependencies": {
+          "SharpGen.Runtime": "2.4.2-beta",
+          "Vortice.DirectX": "3.8.3"
+        }
+      },
+      "Vortice.Mathematics": {
+        "type": "Transitive",
+        "resolved": "2.1.0",
+        "contentHash": "KK+SjNSuKdP+zbavekubi+vaeb1Jo4k87ZF6CMkVWjr6RjJwc8peVtmgzXXDIMy4ZC3ZISyk3llY3q65ISOkBQ=="
+      }
+    },
+    "net8.0-windows10.0.26100/win-x64": {
+      "System.Text.Encodings.Web": {
+        "type": "Direct",
+        "requested": "[10.0.14, )",
+        "resolved": "10.0.14",
+        "contentHash": "+aDpFLtsHyft9ZVx9pZQ9MILqwrr8LK1te1L39VMKQYhoYDbs+RUqBhCT3Zydb5ymi2Buo4Cn+3Wi208IxD6rw=="
+      }
+    }
+  }
+}

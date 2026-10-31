@@ -1,0 +1,19 @@
+# Generated releases, installations, settings, logs and old work branches.
+/outputs/
+/work/*
+!/work/BottomScreen-AutoCursor/
+**/bin/
+**/obj/
+**/logs/
+**/settings.json
+**/BottomScreen.log
+**/self-test/
+.vs/
+.idea/
+*.user
+*.suo
+*.pdb
+*.zip
+.DS_Store
+Thumbs.db
+
