@@ -66,6 +66,10 @@ internal sealed class MainForm : Form
 
     public MainForm(Func<WindowChoice, SourceProcess>? resolveSource = null)
     {
+        // Build the whole tree at the 96-DPI design baseline before WinForms
+        // performs its first autoscale. Otherwise an empty-form layout can consume
+        // the initial scale and a later 150% -> 100% switch shrinks only bounds.
+        SuspendLayout();
         this.resolveSource = resolveSource ?? (choice => SourceProcess.ForWindow(choice.Handle));
         Text = "BottomScreen";
         Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!);
@@ -74,7 +78,8 @@ internal sealed class MainForm : Form
         ForeColor = Color.FromArgb(19, 20, 22);
         AutoScaleDimensions = new SizeF(96, 96);
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(900, Math.Min(1000, (Screen.PrimaryScreen?.WorkingArea.Height ?? 1080) - 80));
+        int logicalWorkHeight = (int)Math.Round((Screen.PrimaryScreen?.WorkingArea.Height ?? 1080) * 96.0 / DeviceDpi);
+        ClientSize = new Size(900, Math.Min(1000, Math.Max(620, logicalWorkHeight - 80)));
         MinimumSize = new Size(760, 700);
         StartPosition = FormStartPosition.CenterScreen;
         var content = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(28, 18, 28, 18), ColumnCount = 1, RowCount = 13, AutoScroll = true };
@@ -155,6 +160,7 @@ internal sealed class MainForm : Form
             SetRunning(false);
             if (!hotkey) status.Text = "停止快捷键被其他程序占用。请关闭占用 Ctrl+Alt+F10 的程序后重新打开。";
         };
+        ResumeLayout(true);
     }
 
     private void AddRow(TableLayoutPanel panel, int row, string label, Control control, Control? action = null)

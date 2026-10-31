@@ -42,6 +42,8 @@ internal sealed class PatternForm : Form
 
 internal sealed class SelfTestForm : Form
 {
+    [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    private static extern nint SendDpiMessage(nint window, uint message, nint dpi, ref Native.Rect suggestedBounds);
     private readonly string directory;
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 100 };
     private readonly List<string> checks = new();
@@ -215,6 +217,43 @@ internal sealed class SelfTestForm : Form
                         $"{scale}: window selector and refresh button share the vertical center");
                 }
                 CheckAlignment("native DPI");
+                int originalDpi = main.DeviceDpi;
+                var originalBounds = main.Bounds;
+                void CheckTextFits(int dpi)
+                {
+                    Check(main.ClientSize.Width >= 850 * dpi / 96,
+                        $"{dpi} DPI: initial logical window width is not prematurely scaled down");
+                    foreach (var button in Descendants(main).OfType<Button>())
+                    {
+                        var text = TextRenderer.MeasureText(button.Text, button.Font, Size.Empty, TextFormatFlags.SingleLine);
+                        Check(button.ClientSize.Width >= text.Width + 8 * dpi / 96 && button.ClientSize.Height >= text.Height + 6 * dpi / 96,
+                            $"{dpi} DPI: {button.Text} has room for its text and padding ({button.Size}; text {text})");
+                    }
+                    for (int row = 0; row < 6; row++)
+                    {
+                        var label = form.GetControlFromPosition(0, row)!;
+                        var text = TextRenderer.MeasureText(label.Text, label.Font, Size.Empty, TextFormatFlags.SingleLine);
+                        Check(label.Width >= text.Width && label.Height <= text.Height + 2,
+                            $"{dpi} DPI: {label.Text} stays on one line");
+                    }
+                }
+                CheckTextFits(originalDpi);
+                foreach (int dpi in new[] { 144, 96, 192, 96, originalDpi })
+                {
+                    double factor = (double)dpi / main.DeviceDpi;
+                    var bounds = new Native.Rect { Left = main.Left, Top = main.Top,
+                        Right = main.Left + (int)Math.Round(main.Width * factor),
+                        Bottom = main.Top + (int)Math.Round(main.Height * factor) };
+                    SendDpiMessage(main.Handle, 0x02E0, (nint)(dpi | dpi << 16), ref bounds);
+                    main.PerformLayout(); form.PerformLayout();
+                    Check(main.DeviceDpi == dpi, $"owned settings window handles WM_DPICHANGED to {dpi} DPI");
+                    CheckTextFits(dpi);
+                    CheckAlignment($"after DPI change to {dpi}");
+                    using var scaledLayout = new Bitmap(main.Width, main.Height);
+                    main.DrawToBitmap(scaledLayout, new Rectangle(Point.Empty, scaledLayout.Size));
+                    scaledLayout.Save(Path.Combine(directory, $"settings-dpi-{dpi}.png"), ImageFormat.Png);
+                }
+                main.Bounds = originalBounds;
                 var hdrBox = Descendants(main).OfType<CheckBox>().Single(x => x.Text == "允许所选游戏使用自动 HDR");
                 var startButton = Descendants(main).OfType<Button>().Single(x => x.Text == "开始显示");
                 var applyButton = Descendants(main).OfType<Button>().Single(x => x.Text == "应用设置");
