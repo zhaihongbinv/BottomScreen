@@ -216,10 +216,9 @@ internal sealed class MainForm : Form
         if (!Native.IsWindow(choice.Handle) || Native.IsIconic(choice.Handle)) { status.Text = "窗口已关闭或最小化。请先还原游戏窗口，再刷新列表。"; return; }
         if (screens.SelectedIndex < 0 || screens.SelectedIndex >= availableScreens.Length)
         { status.Text = "没有可用的输出显示器，请刷新后重试。"; return; }
-        // Auto HDR is an optional source preference, not a capture prerequisite.
-        // A running game may still need restarting to read the changed policy;
-        // preserve that warning without preventing the display from starting.
-        string? hdrWarning = ApplyGameHdr() ? null : hdrInfo.Text;
+        // Only the explicit HDR Apply button queries/writes that preference.
+        // Starting capture never checks process restart state or touches HDR.
+        string? hdrWarning = hdrStatus == null ? null : hdrInfo.Text;
         var screen = availableScreens[screens.SelectedIndex];
         try
         {
@@ -262,7 +261,7 @@ internal sealed class MainForm : Form
     private void UpdateHdrInfo()
     {
         hdrInfo.ForeColor = hdrError ? Color.FromArgb(170, 40, 40) : Color.FromArgb(93, 95, 96);
-        hdrInfo.Text = hdrStatus ?? "自动 HDR：作用于所选游戏；点击“应用设置”后如有更改，请重启游戏。";
+        hdrInfo.Text = hdrStatus ?? "自动 HDR：仅点击“应用设置”时处理；开始显示不会检查 HDR 或要求重启。";
     }
 
     private bool ApplyGameHdr()

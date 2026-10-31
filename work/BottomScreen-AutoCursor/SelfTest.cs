@@ -176,11 +176,16 @@ internal sealed class SelfTestForm : Form
         string uiFixture = Path.Combine(directory, "hdr-ui-fixture.exe");
         bool simulateHdrReadFailure = false;
         long fixtureStarted = DateTime.UtcNow.AddMinutes(-5).ToFileTimeUtc();
+        int hdrQueryCount = 0;
         try
         {
-        using (var main = new MainForm(_ => simulateHdrReadFailure
-            ? throw new InvalidOperationException("fixture process query denied")
-            : new SourceProcess(5678, uiFixture, fixtureStarted)))
+        using (var main = new MainForm(_ =>
+        {
+            hdrQueryCount++;
+            return simulateHdrReadFailure
+                ? throw new InvalidOperationException("fixture process query denied")
+                : new SourceProcess(5678, uiFixture, fixtureStarted);
+        }))
         {
             main.Show(); Application.DoEvents(); main.PerformLayout();
             using (var initialLayout = new Bitmap(main.Width, main.Height))
@@ -241,21 +246,26 @@ internal sealed class SelfTestForm : Form
                 selector.Items.Clear();
                 selector.Items.Add(new WindowChoice(ownedGame.Handle, "BottomScreen self-test", "owned capture startup fixture"));
                 selector.SelectedIndex = 0;
+                applyButton.PerformClick();
                 var stopButton = Descendants(main).OfType<Button>().Single(x => x.Text == "停止");
                 var engineField = typeof(MainForm).GetField("engine", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
                 var overlayField = typeof(MainForm).GetField("overlay", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
                 void VerifyStartButton(string label, string? warning)
                 {
-                    startButton.PerformClick(); Application.DoEvents();
+                    int queriesBefore = hdrQueryCount;
+                    startButton.PerformClick();
                     Check(stopButton.Enabled && !startButton.Enabled, label + ": clicking Start enters capture mode");
+                    Check(hdrQueryCount == queriesBefore, label + ": Start never queries the HDR target process or validates its restart state");
+                    var initialOverlay = overlayField.GetValue(main) as OverlayForm;
+                    Check(initialOverlay?.Visible == true, label + ": Start creates and shows the simulated screen before foreground monitoring");
                     long deadline = Environment.TickCount64 + 4000;
                     while (engineField.GetValue(main) is CaptureEngine active && active.PictureFrameCount == 0 && Environment.TickCount64 < deadline)
                     { Application.DoEvents(); Thread.Sleep(10); }
                     var running = engineField.GetValue(main) as CaptureEngine;
                     var shown = overlayField.GetValue(main) as OverlayForm;
                     Check(running?.PictureFrameCount > 0, label + ": the actual UI startup path captures and presents owned source frames");
-                    Check(shown != null && shown.Visible && shown.Bounds == Screen.FromHandle(shown.Handle).Bounds,
-                        label + ": the simulated screen overlay is visible at the output monitor bounds");
+                    Check(shown != null && shown.Bounds == Screen.FromHandle(shown.Handle).Bounds,
+                        label + ": the simulated screen overlay fills the output monitor bounds");
                     if (warning != null)
                         Check(Descendants(main).OfType<Label>().Any(x => x.Text.StartsWith("显示中") && x.Text.Contains(warning)),
                             label + ": capture keeps the HDR warning visible in settings status");
@@ -267,9 +277,11 @@ internal sealed class SelfTestForm : Form
                 Check(Settings.Load(Path.Combine(AppContext.BaseDirectory, "settings.json")).GameHdrRestartAfterUtc.Count > 0,
                     "starting capture while HDR is pending preserves the game's restart marker");
                 simulateHdrReadFailure = true;
+                applyButton.PerformClick();
                 VerifyStartButton("HDR source preference query fails", "自动 HDR 未能应用");
                 simulateHdrReadFailure = false;
                 fixtureStarted = DateTime.UtcNow.AddSeconds(1).ToFileTimeUtc();
+                applyButton.PerformClick();
                 VerifyStartButton("HDR matching after game restart", null);
                 Check(!Settings.Load(Path.Combine(AppContext.BaseDirectory, "settings.json")).GameHdrRestartAfterUtc.ContainsKey(Path.GetFullPath(uiFixture).ToUpperInvariant()),
                     "matching a restarted source clears only its fulfilled HDR restart marker");
