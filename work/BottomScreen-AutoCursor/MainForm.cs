@@ -214,8 +214,12 @@ internal sealed class MainForm : Form
         if (engine != null || !hotkey) return;
         if (windows.SelectedItem is not WindowChoice choice) { status.Text = "没有可捕获窗口。请先打开游戏，然后点击刷新。"; return; }
         if (!Native.IsWindow(choice.Handle) || Native.IsIconic(choice.Handle)) { status.Text = "窗口已关闭或最小化。请先还原游戏窗口，再刷新列表。"; return; }
-        if (screens.SelectedIndex < 0) return;
-        if (!ApplyGameHdr()) return;
+        if (screens.SelectedIndex < 0 || screens.SelectedIndex >= availableScreens.Length)
+        { status.Text = "没有可用的输出显示器，请刷新后重试。"; return; }
+        // Auto HDR is an optional source preference, not a capture prerequisite.
+        // A running game may still need restarting to read the changed policy;
+        // preserve that warning without preventing the display from starting.
+        string? hdrWarning = ApplyGameHdr() ? null : hdrInfo.Text;
         var screen = availableScreens[screens.SelectedIndex];
         try
         {
@@ -234,6 +238,7 @@ internal sealed class MainForm : Form
             WindowState = FormWindowState.Minimized;
             Native.SetForegroundWindow(source);
             status.Text = Program.PerformanceLoggingEnabled ? "显示中 · 正在后台记录性能日志 · 按 Ctrl+Alt+F10 停止。" : "显示中 · 按 Ctrl+Alt+F10 停止。";
+            if (hdrWarning != null) status.Text += " " + hdrWarning;
         }
         catch (Exception e) { Program.Log(e.ToString()); StopCapture("启动失败：" + e.Message); }
     }
@@ -275,7 +280,7 @@ internal sealed class MainForm : Form
             bool needsRestart = GameHdrController.NeedsRestart(process, settings);
             string state = allowAutoHdr.Checked ? "跟随 Windows 全局设置" : "已禁用";
             hdrStatus = $"{Path.GetFileName(process.Executable)}：自动 HDR {state}。" +
-                (needsRestart ? "请手动重启游戏，然后刷新窗口列表。" : "配置已匹配。");
+                (needsRestart ? "请手动重启游戏使更改生效；当前仍可开始显示。" : "配置已匹配。");
             hdrError = false; UpdateHdrInfo();
             if (needsRestart) status.Text = hdrStatus;
             return !needsRestart;
@@ -283,7 +288,8 @@ internal sealed class MainForm : Form
         catch (Exception e)
         {
             hdrStatus = e.Message; hdrError = true; UpdateHdrInfo();
-            status.Text = "无法应用游戏自动 HDR 设置：" + e.Message;
+            hdrInfo.Text = "自动 HDR 未能应用，仍可开始显示：" + e.Message;
+            status.Text = hdrInfo.Text;
             return false;
         }
     }
