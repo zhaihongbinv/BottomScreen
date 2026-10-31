@@ -145,6 +145,8 @@ internal sealed class SelfTestForm : Form
             "FPS display does not resample on every game frame");
         Check(meter.Observe(180, 2 * Stopwatch.Frequency) && meter.FramesPerSecond == 60, "FPS updates to actual changed rate");
         Check(meter.Observe(480, 3 * Stopwatch.Frequency) && meter.FramesPerSecond == 300, "FPS is not fabricated or clamped to monitor Hz");
+        Check(meter.Observe(480, 4 * Stopwatch.Frequency) && meter.FramesPerSecond == 0,
+            "no new source frames reports zero FPS instead of counting cached redraws");
         using (var summary = JsonDocument.Parse(JsonSerializer.Serialize(PerformanceLog.Summarize(new double[] { 1, 2, 3, 4, 100 }))))
         {
             Check(summary.RootElement.GetProperty("avg").GetDouble() == 22, "performance average includes spikes");
@@ -369,7 +371,7 @@ internal sealed class SelfTestForm : Form
         }
         using (var frame = capture.Snapshot())
         {
-            Check(hud.Fps > 0 && hud.Text.Contains("FPS"), "HUD shows a measured nonzero submitted frame rate");
+            Check(hud.Fps > 0 && hud.Text.Contains("画面更新") && hud.Text.Contains("FPS"), "HUD shows a measured nonzero source-image update rate");
             Check(hud.Bounds.Top >= 0 && hud.Bounds.Bottom < target.Top, "FPS HUD stays entirely inside the top black region");
             int bright = 0;
             for (int y = hud.Bounds.Top; y < hud.Bounds.Bottom; y++)
@@ -435,6 +437,7 @@ internal sealed class SelfTestForm : Form
         var crop = new Rectangle(0, 0, 640, 360);
         var destination = Geometry.Target(new Size(640, 360), 31.5, 24);
         for (int i = 0; i < 3; i++) renderer.Draw(null, crop, destination);
+        Check(renderer.PictureFrameCount == 1, "cached redraws count only the first successful source-image presentation");
         using (var cached = renderer.Snapshot())
             Check(IsColor(cached.GetPixel(destination.X + 20, destination.Y + 20), Color.FromArgb(0, 150, 0)),
                 "GPU cache survives release of the original source and redraws without recopying");
@@ -451,11 +454,28 @@ internal sealed class SelfTestForm : Form
             Check(changed > 5, "cached GPU redraw preserves native cursor shape pixels: " + style);
         }
         Check(renderer.ImageCopies == 1, "repeated GPU redraws and cursor changes do not recopy the game image");
+        Check(renderer.PictureFrameCount == 1, "all four cursor shapes and cursor redraws are excluded from picture FPS");
         renderer.Draw(null, crop, destination);
         renderer.Draw(null, crop, destination);
         using (var hidden = renderer.Snapshot())
             Check(IsColor(hidden.GetPixel(destination.X + destination.Width / 2, destination.Y + destination.Height / 2), Color.FromArgb(0, 150, 0)),
                 "cached GPU redraw removes the simulated cursor when the source hides it");
+        Check(renderer.PictureFrameCount == 1, "cursor removal and additional cached submissions are excluded from picture FPS");
+        fixed (byte* pointer = pixels)
+        {
+            using var next = renderer.Device.CreateTexture2D(new Vortice.Direct3D11.Texture2DDescription
+            {
+                Width = 640, Height = 360, MipLevels = 1, ArraySize = 1, Format = Vortice.DXGI.Format.B8G8R8A8_UNorm,
+                SampleDescription = new Vortice.DXGI.SampleDescription(1, 0), Usage = Vortice.Direct3D11.ResourceUsage.Immutable,
+                BindFlags = Vortice.Direct3D11.BindFlags.ShaderResource
+            }, new Vortice.Direct3D11.SubresourceData((nint)pointer, 640 * 4, 0));
+            renderer.StoreImage(next);
+        }
+        Check(renderer.PictureFrameCount == 1, "copying a new source without presenting it does not increment picture FPS");
+        renderer.Draw(null, crop, destination);
+        Check(renderer.PictureFrameCount == 2, "a successfully presented new source image increments picture FPS exactly once");
+        renderer.Draw(null, crop, destination);
+        Check(renderer.PictureFrameCount == 2, "redrawing the second source image does not double count it");
     }
 
     private void Verify(Bitmap image, Rectangle region, string label)

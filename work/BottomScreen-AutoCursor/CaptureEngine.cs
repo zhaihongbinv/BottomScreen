@@ -47,6 +47,7 @@ internal sealed class CaptureEngine : IDisposable
     public double? OriginalUpdateIntervalMs { get; }
     public double? AppliedUpdateIntervalMs { get; }
     public long FrameCount { get; private set; }
+    public long PictureFrameCount => renderer.PictureFrameCount;
     public Size SourceSize { get; private set; }
     public Size ClientSize { get; private set; }
     private Rectangle cursorSourceScreen;
@@ -55,7 +56,7 @@ internal sealed class CaptureEngine : IDisposable
     public event Action<string>? Failed;
     public (double? Fps, string Text, Rectangle Bounds) HudMetrics
     {
-        get { lock (gate) return (renderer.SubmissionFps, renderer.HudText, renderer.HudBounds); }
+        get { lock (gate) return (renderer.PictureFps, renderer.HudText, renderer.HudBounds); }
     }
 
     public CaptureEngine(nint source, nint output, Size size, Rectangle destination, bool nearest, bool centerFourThree = false, int refreshHz = 0, bool showFps = true, bool? enablePerformanceLogging = null)

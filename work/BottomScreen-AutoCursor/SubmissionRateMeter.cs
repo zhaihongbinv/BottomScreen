@@ -2,7 +2,8 @@ using System.Diagnostics;
 
 namespace BottomScreen;
 
-// Counts successful Present calls over measured elapsed time; never substitutes monitor Hz.
+// Measures the supplied completed-frame count over elapsed time. The HUD supplies
+// distinct source images successfully presented, not cached cursor/HUD redraws.
 internal sealed class SubmissionRateMeter
 {
     private bool initialized;

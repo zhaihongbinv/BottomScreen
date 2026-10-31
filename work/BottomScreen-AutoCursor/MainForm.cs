@@ -36,7 +36,7 @@ internal sealed class MainForm : Form
     private readonly RadioButton size24 = new() { Text = "24 寸", Checked = true, AutoSize = true };
     private readonly RadioButton size27 = new() { Text = "27 寸", AutoSize = true };
     private readonly CheckBox nearest = new() { Text = "锐利像素（最近邻）；关闭时使用平滑缩放", AutoSize = true };
-    private readonly CheckBox showFps = new() { Text = "顶部黑边显示提交帧率", AutoSize = true, Checked = true };
+    private readonly CheckBox showFps = new() { Text = "顶部黑边显示画面更新帧率", AutoSize = true, Checked = true };
     private readonly CheckBox allowAutoHdr = new() { Text = "允许所选游戏使用自动 HDR", AutoSize = true };
     private readonly Label hdrInfo = new() { AutoSize = true, ForeColor = Color.FromArgb(93, 95, 96), MaximumSize = new Size(770, 0) };
     private readonly Button applyHdr = new() { Text = "应用设置", Height = 34 };
@@ -47,7 +47,7 @@ internal sealed class MainForm : Form
     private readonly Button stop = new() { Text = "停止", Width = 90, Height = 40, Enabled = false };
     private readonly Label outputInfo = new() { AutoSize = true, ForeColor = Color.FromArgb(75, 77, 80) };
     private readonly Label status = new() { AutoSize = true, MaximumSize = new Size(770, 0), Text = "就绪 · 支持窗口 / 全屏窗口化，请选择游戏窗口。" };
-    private readonly Label telemetry = new() { AutoSize = true, ForeColor = Color.FromArgb(75, 77, 80), Text = "源画面：—    捕获帧率：—" };
+    private readonly Label telemetry = new() { AutoSize = true, ForeColor = Color.FromArgb(75, 77, 80), Text = "源画面：—    画面更新帧率：—" };
     private readonly ScreenPreview preview = new() { Dock = DockStyle.Fill, Height = 190 };
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 100 };
     private readonly Stopwatch stats = new();
@@ -316,7 +316,7 @@ internal sealed class MainForm : Form
         if (Native.IsIconic(source)) { StopCapture("游戏已最小化，显示已停止。"); return; }
         bool foreground = Native.GetForegroundWindow() == source;
         if (foreground != overlay.Visible) { if (foreground) overlay.Show(); else overlay.Hide(); }
-        long count = engine.FrameCount;
+        long count = engine.PictureFrameCount;
         var cursorState = engine.CursorState;
         try { cursorGuard?.Pulse(foreground && count > 0 && cursorState.Rendered ? source : 0, cursorState.Source); }
         catch (Exception e) { StopCapture(e.Message); return; }
@@ -329,7 +329,7 @@ internal sealed class MainForm : Form
         double fps = (count - lastFrames) * 1000.0 / stats.ElapsedMilliseconds;
         var size = engine.SourceSize;
         var client = engine.ClientSize;
-        telemetry.Text = $"源区域：{size.Width}×{size.Height} / 窗口：{client.Width}×{client.Height}    捕获：{fps:F0} 帧/秒（非游戏FPS）";
+        telemetry.Text = $"源区域：{size.Width}×{size.Height} / 窗口：{client.Width}×{client.Height}    画面更新：{fps:F0} FPS（不同源帧）";
         lastFrames = count; stats.Restart();
     }
 

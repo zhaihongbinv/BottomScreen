@@ -40,10 +40,11 @@ internal sealed class GpuRenderer : IDisposable
     private readonly bool showFps;
     private readonly int refreshHz;
     private readonly SubmissionRateMeter rateMeter = new();
-    private long submittedFrames;
+    private long lastPresentedImageVersion;
     private ID3D11Texture2D? hudTexture;
     private ID3D11ShaderResourceView? hudView;
-    public double? SubmissionFps => rateMeter.FramesPerSecond;
+    public double? PictureFps => rateMeter.FramesPerSecond;
+    public long PictureFrameCount { get; private set; }
     public string HudText { get; private set; } = "";
     public Rectangle HudBounds { get; private set; }
     public string AdapterName { get; }
@@ -181,7 +182,7 @@ internal sealed class GpuRenderer : IDisposable
         context.Draw(3, 0);
         if (cursor != null) DrawCursor(cursor, uv, crop, destination);
         long draw = profile ? Stopwatch.GetTimestamp() : 0;
-        bool sampleChanged = rateMeter.Observe(submittedFrames, Stopwatch.GetTimestamp());
+        bool sampleChanged = rateMeter.Observe(PictureFrameCount, Stopwatch.GetTimestamp());
         if (showFps && destination.Top >= 32)
         {
             if (sampleChanged || hudView == null) UpdateHud(destination);
@@ -191,7 +192,13 @@ internal sealed class GpuRenderer : IDisposable
         long hud = profile ? Stopwatch.GetTimestamp() : 0;
         swapChain.Present(0, PresentFlags.None).CheckError();
         long present = profile ? Stopwatch.GetTimestamp() : 0;
-        submittedFrames++;
+        // Count a source image once, only after a successful Present. Cached
+        // redraws for pointer movement or HUD refresh are not game updates.
+        if (lastPresentedImageVersion != ImageCopies)
+        {
+            PictureFrameCount++;
+            lastPresentedImageVersion = ImageCopies;
+        }
         if (!profile) return default;
         double ms = 1000.0 / Stopwatch.Frequency;
         return new DrawTiming(stored.ResourceMs, stored.CopyMs,
@@ -210,7 +217,7 @@ internal sealed class GpuRenderer : IDisposable
         HudBounds = new Rectangle((outputSize.Width - width) / 2, (destination.Top - height) / 2, width, height);
         string rate = rateMeter.FramesPerSecond is double fps ? $"{fps:F1} FPS" : "采样中…";
         string refresh = refreshHz > 0 ? $"   |   刷新 {refreshHz} Hz" : "";
-        HudText = $"画面提交 {rate}{refresh}";
+        HudText = $"画面更新 {rate}{refresh}";
         using var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
         using (var graphics = Graphics.FromImage(bitmap))
         using (var primaryFont = new Font("Microsoft YaHei UI", primarySize, FontStyle.Bold, GraphicsUnit.Pixel))
@@ -224,7 +231,7 @@ internal sealed class GpuRenderer : IDisposable
             float topHeight = twoLines ? primarySize + 6 * scale : height;
             graphics.DrawString(HudText, primaryFont, Brushes.White, new RectangleF(0, 0, width, topHeight), format);
             if (twoLines)
-                graphics.DrawString("约1秒统计 · 非游戏FPS / 非面板实显测量", secondaryFont, secondaryBrush,
+                graphics.DrawString("约1秒统计 · 仅计不同源帧 / 非面板实显测量", secondaryFont, secondaryBrush,
                     new RectangleF(0, topHeight, width, height - topHeight), format);
         }
         var data = bitmap.LockBits(new Rectangle(Point.Empty, bitmap.Size), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);

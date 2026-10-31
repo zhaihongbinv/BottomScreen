@@ -43,7 +43,7 @@ internal sealed class PerformanceLog : IDisposable
             void Line(object value) => output.WriteLine(JsonSerializer.Serialize(value));
             Line(new { type = "session", version = typeof(Program).Assembly.GetName().Version?.ToString(), time = DateTimeOffset.Now,
                 os = Environment.OSVersion.ToString(), runtime = Environment.Version.ToString(), metadata,
-                definitions = "All durations are CPU wall time, not GPU execution. WGC source timestamps are used only for deltas, not latency. Callback rate is backpressure-dependent, not independent capture capacity. Submitted FPS is successful Present calls, not panel scanout. No screenshots, window titles or keystrokes recorded." });
+                definitions = "All durations are CPU wall time, not GPU execution. WGC source timestamps are used only for deltas, not latency. Callback rate is backpressure-dependent, not independent capture capacity. Log submittedFps counts capture-driven successful Present calls; the HUD counts distinct source images successfully presented, excluding cached cursor/HUD redraws. Neither is panel scanout. No screenshots, window titles or keystrokes recorded." });
             await output.FlushAsync();
             var samples = new List<FrameTiming>(1024);
             long windowStart = start, previousArrival = 0;
