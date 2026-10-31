@@ -46,4 +46,3 @@ pwsh -File ./scripts/build.ps1 -OutputRoot ./work/build-check
 ## 发布约定
 
 本地发布必须同时维护版本归档与固定启动目录，不能用新默认设置覆盖现有设置。详见 [AGENTS.md](AGENTS.md)。CI 在其临时工作区生成相同目录结构，不会操作用户电脑。
-

@@ -11,6 +11,7 @@
     <ApplicationIcon>app.ico</ApplicationIcon>
     <AssemblyName>BottomScreen</AssemblyName>
     <Version>0.2.8</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <NuGetAuditMode>all</NuGetAuditMode>
   </PropertyGroup>

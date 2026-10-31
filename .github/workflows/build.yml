@@ -64,4 +64,3 @@ jobs:
           - ZIP SHA256: ``$env:ZIP_SHA256``
           - Game capture, HDR and input-to-photon latency require testing on real hardware.
           "@ | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
-
