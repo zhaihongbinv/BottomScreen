@@ -77,6 +77,45 @@ internal sealed class SelfTestForm : Form
         var process = SourceProcess.ForWindow(Handle);
         Check(process.Id == Environment.ProcessId && Path.GetFullPath(process.Executable).Equals(Path.GetFullPath(Environment.ProcessPath!), StringComparison.OrdinalIgnoreCase)
             && process.StartedFileTimeUtc > 0, "selected HWND resolves its actual executable path and process creation time with limited query access");
+        var defaultSettings = new Settings();
+        Check(defaultSettings.AutoResume && defaultSettings.AutoResumeDelaySeconds == AutoResumeRules.DefaultDelaySeconds && defaultSettings.RememberedGame == null,
+            "auto resume defaults on with a five second delay and no remembered game");
+        var remembered = new RememberedGame
+        {
+            Executable = @"C:\Games\CS2.EXE", ProcessName = "cs2", PanelInches = 31.5, TargetInches = 27,
+            Nearest = true, CenterFourThree = true, ShowFps = false, Monitor = @"\\.\DISPLAY2", LastUsedFileTimeUtc = 123456,
+        };
+        string rememberedPath = Path.Combine(directory, "remembered-settings.json");
+        File.WriteAllText(rememberedPath, JsonSerializer.Serialize(new Settings { AutoResume = false, AutoResumeDelaySeconds = 7, RememberedGame = remembered }));
+        var loadedRemembered = Settings.Load(rememberedPath);
+        Check(!loadedRemembered.AutoResume && loadedRemembered.AutoResumeDelaySeconds == 7 && loadedRemembered.RememberedGame is { } game &&
+            game.Executable == remembered.Executable && game.TargetInches == 27 && game.Nearest && game.CenterFourThree && !game.ShowFps && game.Monitor == remembered.Monitor,
+            "remembered game and auto-resume options survive settings serialization");
+        var rememberedProcess = new SourceProcess(1234, @"c:\games\cs2.exe", 111);
+        Check(AutoResumeRules.Matches(loadedRemembered.RememberedGame, rememberedProcess), "remembered executable matches case-insensitively");
+        Check(!AutoResumeRules.Matches(loadedRemembered.RememberedGame, rememberedProcess with { Id = 5, Executable = @"C:\Games\Other.EXE" }),
+            "a different executable is never auto-resumed");
+        Check(AutoResumeRules.IsSuppressed(rememberedProcess, rememberedProcess.Key, rememberedProcess.StartedFileTimeUtc) &&
+            !AutoResumeRules.IsSuppressed(rememberedProcess with { StartedFileTimeUtc = 222 }, rememberedProcess.Key, rememberedProcess.StartedFileTimeUtc),
+            "manual stop suppression ends when the game process is genuinely restarted");
+        string suppressionPath = Path.Combine(directory, "suppression-settings.json");
+        File.WriteAllText(suppressionPath, JsonSerializer.Serialize(new Settings
+        {
+            AutoResumeSuppressedKey = rememberedProcess.Key, AutoResumeSuppressedStartUtc = rememberedProcess.StartedFileTimeUtc,
+        }));
+        var loadedSuppression = Settings.Load(suppressionPath);
+        Check(loadedSuppression.AutoResumeSuppressedKey == rememberedProcess.Key &&
+            loadedSuppression.AutoResumeSuppressedStartUtc == rememberedProcess.StartedFileTimeUtc,
+            "manual-stop suppression survives restarting the utility for the same game instance");
+        Check(AutoResumeRules.ClampDelay(-4) == 0 && AutoResumeRules.ClampDelay(1000) == AutoResumeRules.MaximumDelaySeconds,
+            "auto-resume delay is bounded");
+        var countdown = new AutoResumeCountdown();
+        Check(!countdown.Observe(true, 1000, 5) && countdown.Pending && countdown.RemainingSeconds(2500, 5) == 4,
+            "foreground game starts a visible five second countdown");
+        Check(!countdown.Observe(false, 3000, 5) && !countdown.Pending, "leaving the game foreground cancels the countdown");
+        Check(!countdown.Observe(true, 4000, 5) && !countdown.Observe(true, 8999, 5) && countdown.Observe(true, 9000, 5),
+            "auto start becomes due only after the full delay");
+        Check(countdown.Observe(true, 20000, 0), "zero delay starts immediately");
         Check(AutoHdrPreference.Merge(null, false) == "AutoHDREnable=48;", "Auto HDR off uses the preference observed in Windows Settings");
         const string otherPreferences = "GpuPreference=2;SwapEffectUpgradeEnable=1;UnknownFutureFlag=hello;";
         Check(AutoHdrPreference.Merge(otherPreferences + "AutoHDREnable=1;", false) == otherPreferences + "AutoHDREnable=48;",
@@ -204,7 +243,7 @@ internal sealed class SelfTestForm : Form
                 var form = Descendants(main).OfType<TableLayoutPanel>().Single(x => x.ColumnCount == 3);
                 void CheckAlignment(string scale)
                 {
-                    for (int row = 0; row < 6; row++)
+                    for (int row = 0; row < 8; row++)
                     {
                         var label = form.GetControlFromPosition(0, row)!;
                         var value = form.GetControlFromPosition(1, row)!;
@@ -229,7 +268,7 @@ internal sealed class SelfTestForm : Form
                         Check(button.ClientSize.Width >= text.Width + 8 * dpi / 96 && button.ClientSize.Height >= text.Height + 6 * dpi / 96,
                             $"{dpi} DPI: {button.Text} has room for its text and padding ({button.Size}; text {text})");
                     }
-                    for (int row = 0; row < 6; row++)
+                    for (int row = 0; row < 8; row++)
                     {
                         var label = form.GetControlFromPosition(0, row)!;
                         var text = TextRenderer.MeasureText(label.Text, label.Font, Size.Empty, TextFormatFlags.SingleLine);
@@ -258,6 +297,17 @@ internal sealed class SelfTestForm : Form
                 var startButton = Descendants(main).OfType<Button>().Single(x => x.Text == "开始显示");
                 var applyButton = Descendants(main).OfType<Button>().Single(x => x.Text == "应用设置");
                 bool couldStartBefore = startButton.Enabled;
+                var autoBox = Descendants(main).OfType<CheckBox>().Single(x => x.Text == "记住最近游戏并自动显示");
+                var autoDelayInput = Descendants(main).OfType<NumericUpDown>().Single(x => x.Maximum == AutoResumeRules.MaximumDelaySeconds);
+                bool originalAuto = autoBox.Checked; decimal originalDelay = autoDelayInput.Value;
+                autoBox.Checked = !originalAuto;
+                Check(Settings.Load(Path.Combine(AppContext.BaseDirectory, "settings.json")).AutoResume == !originalAuto,
+                    "auto-resume checkbox persists its remembered-game mode");
+                autoBox.Checked = originalAuto;
+                autoDelayInput.Value = originalDelay == 5 ? 7 : 5;
+                Check(Settings.Load(Path.Combine(AppContext.BaseDirectory, "settings.json")).AutoResumeDelaySeconds == (int)autoDelayInput.Value,
+                    "auto-resume delay persists");
+                autoDelayInput.Value = originalDelay;
                 hdrBox.Checked = true; form.PerformLayout();
                 Check(Settings.Load(Path.Combine(AppContext.BaseDirectory, "settings.json")).AllowAutoHdr, "HDR checkbox persists the allow setting");
                 using (var preferences = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(AutoHdrPreference.KeyPath))
@@ -294,7 +344,7 @@ internal sealed class SelfTestForm : Form
                     int queriesBefore = hdrQueryCount;
                     startButton.PerformClick();
                     Check(stopButton.Enabled && !startButton.Enabled, label + ": clicking Start enters capture mode");
-                    Check(hdrQueryCount == queriesBefore, label + ": Start never queries the HDR target process or validates its restart state");
+                    Check(hdrQueryCount == queriesBefore + 1, label + ": Start resolves the source once to remember it and never applies HDR");
                     var initialOverlay = overlayField.GetValue(main) as OverlayForm;
                     Check(initialOverlay?.Visible == true, label + ": Start creates and shows the simulated screen before foreground monitoring");
                     long deadline = Environment.TickCount64 + 4000;
@@ -324,6 +374,16 @@ internal sealed class SelfTestForm : Form
                 VerifyStartButton("HDR matching after game restart", null);
                 Check(!Settings.Load(Path.Combine(AppContext.BaseDirectory, "settings.json")).GameHdrRestartAfterUtc.ContainsKey(Path.GetFullPath(uiFixture).ToUpperInvariant()),
                     "matching a restarted source clears only its fulfilled HDR restart marker");
+                var savedAfterStart = Settings.Load(Path.Combine(AppContext.BaseDirectory, "settings.json"));
+                Check(savedAfterStart.RememberedGame is { } rememberedUi &&
+                    Path.GetFullPath(rememberedUi.Executable).Equals(Path.GetFullPath(uiFixture), StringComparison.OrdinalIgnoreCase) &&
+                    rememberedUi.ProcessName.Equals(Path.GetFileNameWithoutExtension(uiFixture), StringComparison.OrdinalIgnoreCase) &&
+                    rememberedUi.TargetInches is 24 or 27 && rememberedUi.PanelInches >= 27 && rememberedUi.Monitor.Length > 0,
+                    "starting capture remembers the captured executable and the display settings used");
+                var suppressedKey = typeof(MainForm).GetField("autoSuppressedKey", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?.GetValue(main) as string;
+                Check(suppressedKey == Path.GetFullPath(uiFixture).ToUpperInvariant() &&
+                    Settings.Load(Path.Combine(AppContext.BaseDirectory, "settings.json")).AutoResumeSuppressedKey == Path.GetFullPath(uiFixture).ToUpperInvariant(),
+                    "manual Stop suppresses auto resume only for the stopped process instance");
             }
             using var bitmap = new Bitmap(main.Width, main.Height);
             main.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));

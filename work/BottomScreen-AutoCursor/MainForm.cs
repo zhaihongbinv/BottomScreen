@@ -12,6 +12,11 @@ internal sealed class Settings
     public bool CenterFourThree { get; set; }
     public bool ShowFps { get; set; } = true;
     public bool AllowAutoHdr { get; set; }
+    public bool AutoResume { get; set; } = true;
+    public int AutoResumeDelaySeconds { get; set; } = AutoResumeRules.DefaultDelaySeconds;
+    public RememberedGame? RememberedGame { get; set; }
+    public string? AutoResumeSuppressedKey { get; set; }
+    public long AutoResumeSuppressedStartUtc { get; set; }
     public Dictionary<string, long> GameHdrRestartAfterUtc { get; set; } = new();
     public string Monitor { get; set; } = "";
 
@@ -21,6 +26,7 @@ internal sealed class Settings
         {
             var settings = JsonSerializer.Deserialize<Settings>(File.ReadAllText(path)) ?? new();
             settings.GameHdrRestartAfterUtc ??= new();
+            settings.AutoResumeDelaySeconds = AutoResumeRules.ClampDelay(settings.AutoResumeDelaySeconds);
             return settings;
         }
         catch { return new(); }
@@ -37,6 +43,9 @@ internal sealed class MainForm : Form
     private readonly RadioButton size27 = new() { Text = "27 寸", AutoSize = true };
     private readonly CheckBox nearest = new() { Text = "锐利像素（最近邻）；关闭时使用平滑缩放", AutoSize = true };
     private readonly CheckBox showFps = new() { Text = "顶部黑边显示画面更新帧率", AutoSize = true, Checked = true };
+    private readonly CheckBox autoResume = new() { Text = "记住最近游戏并自动显示", AutoSize = true };
+    private readonly NumericUpDown autoDelay = new() { Minimum = 0, Maximum = AutoResumeRules.MaximumDelaySeconds, Value = AutoResumeRules.DefaultDelaySeconds, Width = 60 };
+    private readonly Label rememberInfo = new() { AutoSize = true, ForeColor = Color.FromArgb(93, 95, 96), MaximumSize = new Size(760, 0) };
     private readonly CheckBox allowAutoHdr = new() { Text = "允许所选游戏使用自动 HDR", AutoSize = true };
     private readonly Label hdrInfo = new() { AutoSize = true, ForeColor = Color.FromArgb(93, 95, 96), MaximumSize = new Size(770, 0) };
     private readonly Button applyHdr = new() { Text = "应用设置", Height = 34 };
@@ -60,9 +69,16 @@ internal sealed class MainForm : Form
     private long previousFrames;
     private bool restoring;
     private bool hotkey;
+    private readonly AutoResumeCountdown autoCountdown = new();
+    private long lastAutoScan;
+    private bool autoCountdownShown;
+    private SourceProcess? activeSource;
+    private string? autoSuppressedKey;
+    private long autoSuppressedStart;
     private Screen[] availableScreens = Array.Empty<Screen>();
     private Settings settings = new();
     private readonly string settingsPath = Path.Combine(AppContext.BaseDirectory, "settings.json");
+    private bool loading;
 
     public MainForm(Func<WindowChoice, SourceProcess>? resolveSource = null)
     {
@@ -108,6 +124,18 @@ internal sealed class MainForm : Form
         sizes.Controls.AddRange(new Control[] { size24, size27 });
         AddRow(form, 4, "模拟尺寸", sizes);
         AddRow(form, 5, "自动 HDR", allowAutoHdr, applyHdr);
+        var autoControls = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
+        autoResume.Margin = new Padding(0, 0, 14, 0);
+        autoDelay.Margin = new Padding(0, 0, 6, 0);
+        autoControls.Controls.AddRange(new Control[]
+        {
+            autoResume,
+            new Label { Text = "延迟", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 6, 6, 0) },
+            autoDelay,
+            new Label { Text = "秒", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 6, 0, 0) },
+        });
+        AddRow(form, 6, "自动显示", autoControls);
+        AddRow(form, 7, "记忆", rememberInfo);
         content.Controls.Add(form);
         content.Controls.Add(new Label { Text = "显示区域预览", AutoSize = true, Font = new Font(Font, FontStyle.Bold), Margin = new Padding(0, 0, 0, 10) });
         content.Controls.Add(preview);
@@ -146,9 +174,11 @@ internal sealed class MainForm : Form
         screens.SelectedIndexChanged += (_, _) => UpdatePreview();
         diagonal.ValueChanged += (_, _) => UpdatePreview();
         size24.CheckedChanged += (_, _) => UpdatePreview();
-        start.Click += (_, _) => StartCapture(); stop.Click += (_, _) => StopCapture("已停止。");
+        start.Click += (_, _) => StartCapture(); stop.Click += (_, _) => StopCapture("已停止。", suppressAuto: true);
         allowAutoHdr.CheckedChanged += (_, _) => ChangeHdrPreference();
         applyHdr.Click += (_, _) => ApplyGameHdr();
+        autoResume.CheckedChanged += (_, _) => { SaveSettings(); autoCountdown.Reset(); autoCountdownShown = false; UpdateRememberInfo(); };
+        autoDelay.ValueChanged += (_, _) => { SaveSettings(); autoCountdown.Reset(); autoCountdownShown = false; UpdateRememberInfo(); };
         windows.SelectedIndexChanged += (_, _) => { hdrStatus = null; hdrError = false; UpdateHdrInfo(); };
         timer.Tick += (_, _) => Watch(); timer.Start();
         SystemEvents.DisplaySettingsChanged += DisplayChanged;
@@ -158,6 +188,7 @@ internal sealed class MainForm : Form
             form.PerformLayout();
             hotkey = Native.RegisterHotKey(Handle, 1, 0x4003, 0x79);
             SetRunning(false);
+            UpdateRememberInfo();
             if (!hotkey) status.Text = "停止快捷键被其他程序占用。请关闭占用 Ctrl+Alt+F10 的程序后重新打开。";
         };
         ResumeLayout(true);
@@ -234,18 +265,24 @@ internal sealed class MainForm : Form
             source = choice.Handle;
             engine = new CaptureEngine(source, overlay.Handle, screen.Bounds.Size, rect, nearest.Checked,
                 sourceMode.SelectedIndex == 1, Native.RefreshRate(screen), showFps.Checked);
-            engine.Failed += message => { if (!IsDisposed && IsHandleCreated) BeginInvoke(() => StopCapture(message)); };
+            engine.Failed += message => { if (!IsDisposed && IsHandleCreated) BeginInvoke(() => StopCapture(message, suppressAuto: true)); };
             cursorGuard = new SystemCursorGuard();
             lastFrames = previousFrames = 0; lastFrameProgress = Environment.TickCount64;
-            stats.Restart();
+            stats.Restart(); autoCountdown.Reset(); autoCountdownShown = false;
             SetRunning(true); SaveSettings();
             overlay.Show(); engine.Start();
+            try
+            {
+                activeSource = resolveSource(choice);
+                RememberGame(activeSource);
+            }
+            catch { activeSource = null; UpdateRememberInfo(); }
             WindowState = FormWindowState.Minimized;
             Native.SetForegroundWindow(source);
             status.Text = Program.PerformanceLoggingEnabled ? "显示中 · 正在后台记录性能日志 · 按 Ctrl+Alt+F10 停止。" : "显示中 · 按 Ctrl+Alt+F10 停止。";
             if (hdrWarning != null) status.Text += " " + hdrWarning;
         }
-        catch (Exception e) { Program.Log(e.ToString()); StopCapture("启动失败：" + e.Message); }
+        catch (Exception e) { Program.Log(e.ToString()); StopCapture("启动失败：" + e.Message, suppressAuto: true); }
     }
 
     private void SetRunning(bool running)
@@ -253,7 +290,7 @@ internal sealed class MainForm : Form
         start.Enabled = !running && hotkey; stop.Enabled = running;
         start.BackColor = start.Enabled ? Color.FromArgb(25, 27, 29) : Color.FromArgb(226, 229, 231);
         start.ForeColor = start.Enabled ? Color.White : Color.FromArgb(75, 77, 80);
-        windows.Enabled = screens.Enabled = sourceMode.Enabled = diagonal.Enabled = size24.Enabled = size27.Enabled = nearest.Enabled = showFps.Enabled = allowAutoHdr.Enabled = !running;
+        windows.Enabled = screens.Enabled = sourceMode.Enabled = diagonal.Enabled = size24.Enabled = size27.Enabled = nearest.Enabled = showFps.Enabled = allowAutoHdr.Enabled = autoResume.Enabled = autoDelay.Enabled = !running;
         applyHdr.Enabled = !running;
     }
 
@@ -299,19 +336,34 @@ internal sealed class MainForm : Form
         }
     }
 
-    private void StopCapture(string message, bool restore = true)
+    private void StopCapture(string message, bool restore = true, bool suppressAuto = false)
     {
         if (restoring) return;
         restoring = true;
         bool wasRunning = engine != null || overlay != null;
+        bool suppressedRememberedGame = false;
         try
         {
+            if (suppressAuto)
+            {
+                var process = activeSource;
+                if (process == null && source != 0) { try { process = SourceProcess.ForWindow(source); } catch { } }
+                if (process != null)
+                {
+                    SuppressAuto(process);
+                    suppressedRememberedGame = AutoResumeRules.Matches(settings.RememberedGame, process);
+                }
+            }
+            activeSource = null;
+            autoCountdown.Reset(); autoCountdownShown = false;
             cursorGuard?.Dispose(); cursorGuard = null;
             overlay?.Hide();
             var previous = engine; engine = null;
             try { if (previous != null) { previous.StopReason = string.IsNullOrEmpty(message) ? "window closed" : message; previous.Dispose(); } } catch (Exception e) { Program.Log(e.ToString()); }
             overlay?.Dispose(); overlay = null;
-            stats.Reset(); SetRunning(false);
+            stats.Reset(); SetRunning(false); UpdateRememberInfo();
+            if (suppressedRememberedGame && settings.RememberedGame is { } remembered)
+                rememberInfo.Text = $"已停止：{remembered.DisplayName} 本次进程不会自动恢复；重启游戏后恢复。";
             if (message.Length > 0) status.Text = message;
             if (previous?.PerformanceLogError is string logError) status.Text += " 性能日志写入失败：" + logError;
             else if (previous?.PerformanceLogPath != null) status.Text += " 性能日志已保存，可点击“打开性能日志”。";
@@ -322,7 +374,7 @@ internal sealed class MainForm : Form
 
     private void Watch()
     {
-        if (engine == null || overlay == null) return;
+        if (engine == null || overlay == null) { AutoResumeTick(); return; }
         if (!Native.IsWindow(source)) { StopCapture("游戏窗口已关闭。"); return; }
         if (Native.IsIconic(source)) { StopCapture("游戏已最小化，显示已停止。"); return; }
         bool foreground = Native.GetForegroundWindow() == source;
@@ -334,7 +386,7 @@ internal sealed class MainForm : Form
         if (count != previousFrames) { previousFrames = count; lastFrameProgress = Environment.TickCount64; }
         if (foreground && count == 0 && Environment.TickCount64 - lastFrameProgress > 8000)
         {
-            StopCapture("连续8秒没有捕获到新画面。请确认使用窗口或全屏窗口化、检查捕获权限，或用测试画面验证。"); return;
+            StopCapture("连续8秒没有捕获到新画面。请确认使用窗口或全屏窗口化、检查捕获权限，或用测试画面验证。", suppressAuto: true); return;
         }
         if (stats.ElapsedMilliseconds < 1000) return;
         double fps = (count - lastFrames) * 1000.0 / stats.ElapsedMilliseconds;
@@ -342,6 +394,137 @@ internal sealed class MainForm : Form
         var client = engine.ClientSize;
         telemetry.Text = $"源区域：{size.Width}×{size.Height} / 窗口：{client.Width}×{client.Height}    画面更新：{fps:F0} FPS（不同源帧）";
         lastFrames = count; stats.Restart();
+    }
+
+    private void AutoResumeTick()
+    {
+        if (!settings.AutoResume || settings.RememberedGame is not { } game || string.IsNullOrWhiteSpace(game.Executable))
+        {
+            if (autoCountdown.Pending || autoCountdownShown) { autoCountdown.Reset(); autoCountdownShown = false; UpdateRememberInfo(); }
+            return;
+        }
+        long now = Environment.TickCount64;
+        if (now - lastAutoScan < 500) return;
+        lastAutoScan = now;
+        var process = ForegroundSource(Handle);
+        if (process != null && AutoResumeRules.Matches(game, process) && autoSuppressedKey != null &&
+            !AutoResumeRules.IsSuppressed(process, autoSuppressedKey, autoSuppressedStart))
+        {
+            // The game is a new process instance; the previous manual-stop suppression no longer applies.
+            autoSuppressedKey = null; autoSuppressedStart = 0;
+            settings.AutoResumeSuppressedKey = null; settings.AutoResumeSuppressedStartUtc = 0;
+            SaveSettings(); UpdateRememberInfo();
+        }
+        bool candidate = process != null && AutoResumeRules.Matches(game, process) &&
+            !AutoResumeRules.IsSuppressed(process, autoSuppressedKey, autoSuppressedStart);
+        int delay = AutoResumeRules.ClampDelay(settings.AutoResumeDelaySeconds);
+        if (autoCountdown.Observe(candidate, now, delay))
+        {
+            autoCountdownShown = false;
+            string? failure = null;
+            if (process != null && TryAutoStart(process, out failure)) return;
+            if (failure != null) { status.Text = failure; UpdateRememberInfo(); }
+            else UpdateRememberInfo();
+            return;
+        }
+        if (!candidate)
+        {
+            if (autoCountdownShown) { autoCountdownShown = false; UpdateRememberInfo(); }
+            else if (rememberInfo.Text.StartsWith("检测到", StringComparison.Ordinal)) UpdateRememberInfo();
+            return;
+        }
+        autoCountdownShown = true;
+        rememberInfo.Text = $"检测到 {game.DisplayName} · {Math.Max(1, autoCountdown.RemainingSeconds(now, delay))} 秒后自动开始（切走取消）";
+    }
+
+    private bool TryAutoStart(SourceProcess process, out string? failure)
+    {
+        failure = null;
+        nint hwnd = Native.GetForegroundWindow();
+        if (hwnd == 0 || hwnd == Handle || !Native.IsWindow(hwnd) || !Native.IsWindowVisible(hwnd) || Native.IsIconic(hwnd)) return false;
+        SourceProcess current;
+        try { current = SourceProcess.ForWindow(hwnd); } catch { return false; }
+        if (current.Id != process.Id || current.StartedFileTimeUtc != process.StartedFileTimeUtc) return false;
+        if (AutoResumeRules.IsSuppressed(current, autoSuppressedKey, autoSuppressedStart)) return false;
+        var game = settings.RememberedGame;
+        if (game == null) return false;
+        ApplyRememberedSettings(game);
+        RefreshWindows();
+        var choice = windows.Items.Cast<WindowChoice>().FirstOrDefault(x => x.Handle == hwnd);
+        if (choice == null)
+        {
+            SuppressAuto(current);
+            failure = $"检测到 {game.DisplayName}，但找不到可捕获窗口；请手动点击“开始显示”。";
+            return false;
+        }
+        windows.SelectedIndex = windows.Items.IndexOf(choice);
+        StartCapture();
+        if (engine != null) return true;
+        SuppressAuto(current);
+        failure = "自动开始失败；请手动点击“开始显示”，或关闭自动显示。";
+        return false;
+    }
+
+    private void ApplyRememberedSettings(RememberedGame game)
+    {
+        diagonal.Value = Math.Clamp((decimal)game.PanelInches, diagonal.Minimum, diagonal.Maximum);
+        size24.Checked = game.TargetInches != 27;
+        size27.Checked = game.TargetInches == 27;
+        nearest.Checked = game.Nearest;
+        sourceMode.SelectedIndex = game.CenterFourThree ? 1 : 0;
+        showFps.Checked = game.ShowFps;
+        int monitor = Array.FindIndex(availableScreens, x => string.Equals(x.DeviceName, game.Monitor, StringComparison.OrdinalIgnoreCase));
+        if (monitor >= 0) screens.SelectedIndex = monitor;
+        UpdatePreview();
+    }
+
+    private void RememberGame(SourceProcess process)
+    {
+        if (process.Id == Environment.ProcessId || string.Equals(process.Key,
+            Path.GetFullPath(Environment.ProcessPath!).ToUpperInvariant(), StringComparison.Ordinal))
+        { UpdateRememberInfo(); return; }
+        settings.RememberedGame = new RememberedGame
+        {
+            Executable = process.Executable,
+            ProcessName = Path.GetFileNameWithoutExtension(process.Executable),
+            PanelInches = (double)diagonal.Value,
+            TargetInches = size24.Checked ? 24 : 27,
+            Nearest = nearest.Checked,
+            CenterFourThree = sourceMode.SelectedIndex == 1,
+            ShowFps = showFps.Checked,
+            Monitor = screens.SelectedIndex >= 0 && screens.SelectedIndex < availableScreens.Length ? availableScreens[screens.SelectedIndex].DeviceName : settings.Monitor,
+            LastUsedFileTimeUtc = DateTime.UtcNow.ToFileTimeUtc(),
+        };
+        SaveSettings();
+        UpdateRememberInfo($"正在显示：{settings.RememberedGame.DisplayName}");
+    }
+
+    private void SuppressAuto(SourceProcess process)
+    {
+        autoSuppressedKey = process.Key;
+        autoSuppressedStart = process.StartedFileTimeUtc;
+        settings.AutoResumeSuppressedKey = autoSuppressedKey;
+        settings.AutoResumeSuppressedStartUtc = autoSuppressedStart;
+        SaveSettings();
+    }
+
+    private static SourceProcess? ForegroundSource(nint exclude)
+    {
+        nint hwnd = Native.GetForegroundWindow();
+        if (hwnd == 0 || hwnd == exclude || !Native.IsWindowVisible(hwnd) || Native.IsIconic(hwnd)) return null;
+        try { return SourceProcess.ForWindow(hwnd); } catch { return null; }
+    }
+
+    private void UpdateRememberInfo(string? text = null)
+    {
+        if (text != null) { rememberInfo.Text = text; return; }
+        var game = settings.RememberedGame;
+        if (game == null || string.IsNullOrWhiteSpace(game.Executable))
+            rememberInfo.Text = "尚未记住游戏：成功开始一次后会自动记住最近一个。";
+        else if (!settings.AutoResume)
+            rememberInfo.Text = $"已记住：{game.DisplayName} · 自动显示已关闭";
+        else
+            rememberInfo.Text = $"已记住：{game.DisplayName} · 游戏切到前台 {AutoResumeRules.ClampDelay(settings.AutoResumeDelaySeconds)} 秒后自动开始";
     }
 
     private void DisplayChanged(object? sender, EventArgs e)
@@ -356,27 +539,40 @@ internal sealed class MainForm : Form
 
     protected override void WndProc(ref Message m)
     {
-        if (m.Msg == 0x0312 && m.WParam == 1) { StopCapture("已通过快捷键停止。"); return; }
+        if (m.Msg == 0x0312 && m.WParam == 1) { StopCapture("已通过快捷键停止。", suppressAuto: true); return; }
         base.WndProc(ref m);
     }
 
     private void LoadSettings()
     {
-        settings = Settings.Load(settingsPath);
-        diagonal.Value = Math.Clamp((decimal)settings.PanelInches, diagonal.Minimum, diagonal.Maximum);
-        size24.Checked = settings.TargetInches != 27; size27.Checked = settings.TargetInches == 27;
-        nearest.Checked = settings.Nearest;
-        sourceMode.SelectedIndex = settings.CenterFourThree ? 1 : 0;
-        showFps.Checked = settings.ShowFps;
-        allowAutoHdr.Checked = settings.AllowAutoHdr;
+        loading = true;
+        try
+        {
+            settings = Settings.Load(settingsPath);
+            autoSuppressedKey = settings.AutoResumeSuppressedKey;
+            autoSuppressedStart = settings.AutoResumeSuppressedStartUtc;
+            diagonal.Value = Math.Clamp((decimal)settings.PanelInches, diagonal.Minimum, diagonal.Maximum);
+            size24.Checked = settings.TargetInches != 27; size27.Checked = settings.TargetInches == 27;
+            nearest.Checked = settings.Nearest;
+            sourceMode.SelectedIndex = settings.CenterFourThree ? 1 : 0;
+            showFps.Checked = settings.ShowFps;
+            allowAutoHdr.Checked = settings.AllowAutoHdr;
+            autoResume.Checked = settings.AutoResume;
+            autoDelay.Value = Math.Clamp(settings.AutoResumeDelaySeconds, (int)autoDelay.Minimum, (int)autoDelay.Maximum);
+        }
+        finally { loading = false; }
+        UpdateRememberInfo();
     }
     private bool SaveSettings()
     {
+        if (loading) return true;
         settings.PanelInches = (double)diagonal.Value; settings.TargetInches = size24.Checked ? 24 : 27;
         settings.Nearest = nearest.Checked;
         settings.CenterFourThree = sourceMode.SelectedIndex == 1;
         settings.ShowFps = showFps.Checked;
         settings.AllowAutoHdr = allowAutoHdr.Checked;
+        settings.AutoResume = autoResume.Checked;
+        settings.AutoResumeDelaySeconds = AutoResumeRules.ClampDelay((int)autoDelay.Value);
         if (screens.SelectedIndex >= 0) settings.Monitor = availableScreens[screens.SelectedIndex].DeviceName;
         try { File.WriteAllText(settingsPath, JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true })); return true; }
         catch { return false; }

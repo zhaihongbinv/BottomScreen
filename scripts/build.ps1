@@ -113,7 +113,7 @@ try {
     if ($null -eq $entry) { throw 'ZIP executable is missing.' }
     $stream = $entry.Open()
     $hasher = [Security.Cryptography.SHA256]::Create()
-    try { $zipExeHash = [Convert]::ToHexString($hasher.ComputeHash($stream)) }
+    try { $zipExeHash = [BitConverter]::ToString($hasher.ComputeHash($stream)).Replace('-', '') }
     finally { $hasher.Dispose(); $stream.Dispose() }
     if ($zipExeHash -ne $exeHash) { throw 'ZIP executable SHA256 mismatch.' }
     foreach ($file in $archive.Entries) {
