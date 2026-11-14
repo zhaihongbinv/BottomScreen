@@ -19,6 +19,7 @@ internal sealed class Settings
     public long AutoResumeSuppressedStartUtc { get; set; }
     public Dictionary<string, long> GameHdrRestartAfterUtc { get; set; } = new();
     public string Monitor { get; set; } = "";
+    public string MonitorDeviceId { get; set; } = "";
 
     internal static Settings Load(string path)
     {
@@ -76,6 +77,7 @@ internal sealed class MainForm : Form
     private string? autoSuppressedKey;
     private long autoSuppressedStart;
     private Screen[] availableScreens = Array.Empty<Screen>();
+    private DisplayInfo[] displays = Array.Empty<DisplayInfo>();
     private Settings settings = new();
     private readonly string settingsPath = Path.Combine(AppContext.BaseDirectory, "settings.json");
     private bool loading;
@@ -223,13 +225,17 @@ internal sealed class MainForm : Form
 
     private void RefreshScreens()
     {
-        string selected = screens.SelectedIndex >= 0 && screens.SelectedIndex < availableScreens.Length ? availableScreens[screens.SelectedIndex].DeviceName : settings.Monitor;
+        string selectedName = screens.SelectedIndex >= 0 && screens.SelectedIndex < availableScreens.Length
+            ? availableScreens[screens.SelectedIndex].DeviceName : settings.Monitor;
+        string selectedId = screens.SelectedIndex >= 0 && screens.SelectedIndex < displays.Length
+            ? displays[screens.SelectedIndex].MonitorDeviceId : settings.MonitorDeviceId;
         availableScreens = Screen.AllScreens;
+        displays = availableScreens.Select(x => new DisplayInfo(x.DeviceName, Native.MonitorDeviceId(x.DeviceName) ?? "", x.Primary)).ToArray();
         screens.Items.Clear();
         foreach (var screen in availableScreens)
             screens.Items.Add($"{screen.DeviceName}  ·  {screen.Bounds.Width}×{screen.Bounds.Height}  ·  {Native.RefreshRate(screen)} Hz{(screen.Primary ? "  主屏" : "")}");
-        int index = Array.FindIndex(availableScreens, x => x.DeviceName == selected);
-        if (availableScreens.Length > 0) screens.SelectedIndex = index >= 0 ? index : Array.FindIndex(availableScreens, x => x.Primary);
+        int index = DisplaySelection.Resolve(displays, selectedId, selectedName);
+        if (index >= 0) screens.SelectedIndex = index;
         UpdatePreview();
     }
 
@@ -249,6 +255,8 @@ internal sealed class MainForm : Form
     private void StartCapture()
     {
         if (engine != null || !hotkey) return;
+        // Use the displays connected at this moment, not a list captured earlier.
+        RefreshScreens();
         if (windows.SelectedItem is not WindowChoice choice) { status.Text = "没有可捕获窗口。请先打开游戏，然后点击刷新。"; return; }
         if (!Native.IsWindow(choice.Handle) || Native.IsIconic(choice.Handle)) { status.Text = "窗口已关闭或最小化。请先还原游戏窗口，再刷新列表。"; return; }
         if (screens.SelectedIndex < 0 || screens.SelectedIndex >= availableScreens.Length)
@@ -448,7 +456,7 @@ internal sealed class MainForm : Form
         if (AutoResumeRules.IsSuppressed(current, autoSuppressedKey, autoSuppressedStart)) return false;
         var game = settings.RememberedGame;
         if (game == null) return false;
-        ApplyRememberedSettings(game);
+        bool monitorMatched = ApplyRememberedSettings(game);
         RefreshWindows();
         var choice = windows.Items.Cast<WindowChoice>().FirstOrDefault(x => x.Handle == hwnd);
         if (choice == null)
@@ -459,23 +467,34 @@ internal sealed class MainForm : Form
         }
         windows.SelectedIndex = windows.Items.IndexOf(choice);
         StartCapture();
-        if (engine != null) return true;
+        if (engine != null)
+        {
+            if (!monitorMatched) status.Text += " 记忆的显示器未连接，已使用当前主屏。";
+            return true;
+        }
         SuppressAuto(current);
         failure = "自动开始失败；请手动点击“开始显示”，或关闭自动显示。";
         return false;
     }
 
-    private void ApplyRememberedSettings(RememberedGame game)
+    private bool ApplyRememberedSettings(RememberedGame game)
     {
+        // Rebuild from the displays connected right now; never keep a remembered
+        // adapter ordinal that may now belong to a different physical monitor.
+        RefreshScreens();
+        int monitor = DisplaySelection.Resolve(displays, game.MonitorDeviceId, game.Monitor);
+        bool matched = monitor >= 0 && (string.IsNullOrWhiteSpace(game.MonitorDeviceId)
+            ? string.Equals(displays[monitor].DeviceName, game.Monitor, StringComparison.OrdinalIgnoreCase)
+            : string.Equals(displays[monitor].MonitorDeviceId, game.MonitorDeviceId, StringComparison.OrdinalIgnoreCase));
         diagonal.Value = Math.Clamp((decimal)game.PanelInches, diagonal.Minimum, diagonal.Maximum);
         size24.Checked = game.TargetInches != 27;
         size27.Checked = game.TargetInches == 27;
         nearest.Checked = game.Nearest;
         sourceMode.SelectedIndex = game.CenterFourThree ? 1 : 0;
         showFps.Checked = game.ShowFps;
-        int monitor = Array.FindIndex(availableScreens, x => string.Equals(x.DeviceName, game.Monitor, StringComparison.OrdinalIgnoreCase));
         if (monitor >= 0) screens.SelectedIndex = monitor;
         UpdatePreview();
+        return matched;
     }
 
     private void RememberGame(SourceProcess process)
@@ -493,10 +512,18 @@ internal sealed class MainForm : Form
             CenterFourThree = sourceMode.SelectedIndex == 1,
             ShowFps = showFps.Checked,
             Monitor = screens.SelectedIndex >= 0 && screens.SelectedIndex < availableScreens.Length ? availableScreens[screens.SelectedIndex].DeviceName : settings.Monitor,
+            MonitorDeviceId = SelectedMonitorId(),
             LastUsedFileTimeUtc = DateTime.UtcNow.ToFileTimeUtc(),
         };
         SaveSettings();
         UpdateRememberInfo($"正在显示：{settings.RememberedGame.DisplayName}");
+    }
+
+    private string SelectedMonitorId()
+    {
+        if (screens.SelectedIndex < 0 || screens.SelectedIndex >= availableScreens.Length) return "";
+        if (screens.SelectedIndex < displays.Length) return displays[screens.SelectedIndex].MonitorDeviceId;
+        return Native.MonitorDeviceId(availableScreens[screens.SelectedIndex].DeviceName) ?? "";
     }
 
     private void SuppressAuto(SourceProcess process)
@@ -573,7 +600,11 @@ internal sealed class MainForm : Form
         settings.AllowAutoHdr = allowAutoHdr.Checked;
         settings.AutoResume = autoResume.Checked;
         settings.AutoResumeDelaySeconds = AutoResumeRules.ClampDelay((int)autoDelay.Value);
-        if (screens.SelectedIndex >= 0) settings.Monitor = availableScreens[screens.SelectedIndex].DeviceName;
+        if (screens.SelectedIndex >= 0 && screens.SelectedIndex < availableScreens.Length)
+        {
+            settings.Monitor = availableScreens[screens.SelectedIndex].DeviceName;
+            settings.MonitorDeviceId = SelectedMonitorId();
+        }
         try { File.WriteAllText(settingsPath, JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true })); return true; }
         catch { return false; }
     }

@@ -10,6 +10,7 @@ internal sealed class RememberedGame
     public bool CenterFourThree { get; set; }
     public bool ShowFps { get; set; } = true;
     public string Monitor { get; set; } = "";
+    public string MonitorDeviceId { get; set; } = "";
     public long LastUsedFileTimeUtc { get; set; }
 
     internal string DisplayName => string.IsNullOrWhiteSpace(ProcessName)

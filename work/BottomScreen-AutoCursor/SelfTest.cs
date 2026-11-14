@@ -83,14 +83,43 @@ internal sealed class SelfTestForm : Form
         var remembered = new RememberedGame
         {
             Executable = @"C:\Games\CS2.EXE", ProcessName = "cs2", PanelInches = 31.5, TargetInches = 27,
-            Nearest = true, CenterFourThree = true, ShowFps = false, Monitor = @"\\.\DISPLAY2", LastUsedFileTimeUtc = 123456,
+            Nearest = true, CenterFourThree = true, ShowFps = false, Monitor = @"\\.\DISPLAY2",
+            MonitorDeviceId = @"\\?\DISPLAY#BBB#2", LastUsedFileTimeUtc = 123456,
         };
         string rememberedPath = Path.Combine(directory, "remembered-settings.json");
-        File.WriteAllText(rememberedPath, JsonSerializer.Serialize(new Settings { AutoResume = false, AutoResumeDelaySeconds = 7, RememberedGame = remembered }));
+        File.WriteAllText(rememberedPath, JsonSerializer.Serialize(new Settings
+        {
+            AutoResume = false, AutoResumeDelaySeconds = 7, RememberedGame = remembered,
+            Monitor = @"\\.\DISPLAY2", MonitorDeviceId = @"\\?\DISPLAY#BBB#2",
+        }));
         var loadedRemembered = Settings.Load(rememberedPath);
         Check(!loadedRemembered.AutoResume && loadedRemembered.AutoResumeDelaySeconds == 7 && loadedRemembered.RememberedGame is { } game &&
-            game.Executable == remembered.Executable && game.TargetInches == 27 && game.Nearest && game.CenterFourThree && !game.ShowFps && game.Monitor == remembered.Monitor,
-            "remembered game and auto-resume options survive settings serialization");
+            game.Executable == remembered.Executable && game.TargetInches == 27 && game.Nearest && game.CenterFourThree && !game.ShowFps &&
+            game.Monitor == remembered.Monitor && game.MonitorDeviceId == remembered.MonitorDeviceId &&
+            loadedRemembered.MonitorDeviceId == remembered.MonitorDeviceId,
+            "remembered game and stable monitor identity survive settings serialization");
+        var fakeDisplays = new[]
+        {
+            new DisplayInfo(@"\\.\DISPLAY1", @"\\?\DISPLAY#AAA#1", true),
+            new DisplayInfo(@"\\.\DISPLAY2", @"\\?\DISPLAY#BBB#2", false),
+        };
+        Check(DisplaySelection.Resolve(fakeDisplays, fakeDisplays[1].MonitorDeviceId, fakeDisplays[0].DeviceName) == 1,
+            "stable monitor identity wins even when the remembered display name now points at another monitor");
+        Check(DisplaySelection.Resolve(fakeDisplays, @"\\?\DISPLAY#CCC#3", fakeDisplays[0].DeviceName) == 0,
+            "a disconnected remembered monitor falls back to the current primary, not a reused display name");
+        Check(DisplaySelection.Resolve(fakeDisplays, "", fakeDisplays[1].DeviceName) == 1,
+            "legacy settings without a stable monitor identity still match the display name");
+        Check(DisplaySelection.Resolve(new[]
+        {
+            new DisplayInfo(@"\\.\DISPLAY1", "", true), new DisplayInfo(@"\\.\DISPLAY2", "", false),
+        }, "saved-identity", @"\\.\DISPLAY2") == 1,
+            "name fallback is allowed when the system exposes no monitor interface identities");
+        Check(DisplaySelection.Resolve(Array.Empty<DisplayInfo>(), "id", "name") == -1,
+            "no connected display resolves to no output");
+        Check(DisplaySelection.Resolve(new[]
+        {
+            new DisplayInfo(@"\\.\DISPLAY1", "a", false), new DisplayInfo(@"\\.\DISPLAY2", "b", false),
+        }, "missing", "") == 0, "fallback without a primary uses the first connected display");
         var rememberedProcess = new SourceProcess(1234, @"c:\games\cs2.exe", 111);
         Check(AutoResumeRules.Matches(loadedRemembered.RememberedGame, rememberedProcess), "remembered executable matches case-insensitively");
         Check(!AutoResumeRules.Matches(loadedRemembered.RememberedGame, rememberedProcess with { Id = 5, Executable = @"C:\Games\Other.EXE" }),
@@ -378,8 +407,11 @@ internal sealed class SelfTestForm : Form
                 Check(savedAfterStart.RememberedGame is { } rememberedUi &&
                     Path.GetFullPath(rememberedUi.Executable).Equals(Path.GetFullPath(uiFixture), StringComparison.OrdinalIgnoreCase) &&
                     rememberedUi.ProcessName.Equals(Path.GetFileNameWithoutExtension(uiFixture), StringComparison.OrdinalIgnoreCase) &&
-                    rememberedUi.TargetInches is 24 or 27 && rememberedUi.PanelInches >= 27 && rememberedUi.Monitor.Length > 0,
-                    "starting capture remembers the captured executable and the display settings used");
+                    rememberedUi.TargetInches is 24 or 27 && rememberedUi.PanelInches >= 27 && rememberedUi.Monitor.Length > 0 &&
+                    rememberedUi.MonitorDeviceId == (Native.MonitorDeviceId(rememberedUi.Monitor) ?? ""),
+                    "starting capture remembers the captured executable and the current monitor interface identity");
+                Check(savedAfterStart.MonitorDeviceId == (Native.MonitorDeviceId(savedAfterStart.Monitor) ?? ""),
+                    "the saved output display identity matches the currently connected monitor");
                 var suppressedKey = typeof(MainForm).GetField("autoSuppressedKey", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?.GetValue(main) as string;
                 Check(suppressedKey == Path.GetFullPath(uiFixture).ToUpperInvariant() &&
                     Settings.Load(Path.Combine(AppContext.BaseDirectory, "settings.json")).AutoResumeSuppressedKey == Path.GetFullPath(uiFixture).ToUpperInvariant(),

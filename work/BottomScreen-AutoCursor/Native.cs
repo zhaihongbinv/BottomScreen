@@ -45,6 +45,18 @@ internal static class Native
 
     [StructLayout(LayoutKind.Sequential)] internal struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    internal struct DisplayDevice
+    {
+        public int Size;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string DeviceName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceString;
+        public int StateFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceID;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceKey;
+    }
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    internal static extern bool EnumDisplayDevices(string? device, uint deviceNumber, ref DisplayDevice deviceInfo, uint flags);
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     internal struct DevMode
     {
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string DeviceName;
@@ -60,6 +72,18 @@ internal static class Native
     {
         var mode = new DevMode { Size = (ushort)Marshal.SizeOf<DevMode>(), DeviceName = "", FormName = "" };
         return EnumDisplaySettings(screen.DeviceName, -1, ref mode) ? (int)mode.DisplayFrequency : 0;
+    }
+
+    public static string? MonitorDeviceId(string adapterDeviceName)
+    {
+        var info = new DisplayDevice
+        {
+            Size = Marshal.SizeOf<DisplayDevice>(), DeviceName = "", DeviceString = "", DeviceID = "", DeviceKey = "",
+        };
+        // EDD_GET_DEVICE_INTERFACE_NAME returns the display interface path rather
+        // than the transient adapter ordinal such as \\.\DISPLAY1.
+        return EnumDisplayDevices(adapterDeviceName, 0, ref info, 0x1) && !string.IsNullOrWhiteSpace(info.DeviceID)
+            ? info.DeviceID : null;
     }
 
     public static Rectangle ClientCrop(nint hwnd, Size capture)
